@@ -113,4 +113,50 @@ fn main() {
         std::fs::copy(&pregen_bindings, &out_file)
             .expect("Unable to copy pre-generated libyang4 bindings");
     }
+
+    #[cfg(feature = "bundled")]
+    {
+        use std::path::Path;
+        use std::process::Command;
+        // Initialize the libyang submodule if necessary.
+        if !Path::new("libyang/.git").exists() {
+            let _ = Command::new("git")
+                .args(&["submodule", "update", "--init"])
+                .status();
+        }
+        // Run cmake configure and build libyang
+        let mut cmake_config = cmake::Config::new("libyang");
+        cmake_config.define("BUILD_SHARED_LIBS", "OFF"); // Force static linking
+        cmake_config.define("ENABLE_TESTS", "OFF");
+        cmake_config.define("ENABLE_VALGRIND_TESTS", "OFF");
+        cmake_config.define("ENABLE_BUILD_TESTS", "OFF");
+        cmake_config.define("CMAKE_BUILD_TYPE", "Release");
+        cmake_config.define("CMAKE_POSITION_INDEPENDENT_CODE", "ON");
+        cmake_config.define("CMAKE_DISABLE_FIND_PACKAGE_XXHash", "TRUE");
+        let cmake_dst = cmake_config.build();
+        println!("cargo:root={}", env::var("OUT_DIR").unwrap());
+        println!("cargo:rustc-link-search=native={}/lib", cmake_dst.display());
+        println!(
+            "cargo:rustc-link-search=native={}/lib64",
+            cmake_dst.display()
+        );
+        if let Err(e) = pkg_config::Config::new().probe("libpcre2-8") {
+            println!("cargo:warning=failed to find pcre2 library with pkg-config: {}", e);
+            println!("cargo:warning=attempting to link without pkg-config");
+            println!("cargo:rustc-link-lib=pcre2-8");
+        }
+        println!("cargo:rustc-link-lib=static=yang");
+        println!("cargo:rerun-if-changed=libyang");
+    }
+    #[cfg(not(feature = "bundled"))]
+    {
+        if let Err(e) = pkg_config::Config::new().probe("libyang") {
+            println!(
+                "cargo:warning=failed to find yang library with pkg-config: {}",
+                e
+            );
+            println!("cargo:warning=attempting to link without pkg-config");
+            println!("cargo:rustc-link-lib=yang");
+        }
+    }
 }
